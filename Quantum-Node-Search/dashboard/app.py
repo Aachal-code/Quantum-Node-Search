@@ -65,10 +65,10 @@ graph_type = st.sidebar.selectbox(
 n_nodes = st.sidebar.slider(
     "Number of Nodes",
     min_value=8,
-    max_value=256,
+    max_value=1024,
     value=64,
     step=8,
-    help="Total nodes in the graph (max 256 for practical quantum simulation)"
+    help="Total nodes in the graph (max 1024 for practical quantum simulation)"
 )
 
 target_node = st.sidebar.slider(
