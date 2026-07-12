@@ -3,6 +3,13 @@ Interactive Streamlit Dashboard for Quantum Search in Graphs.
 Run with: streamlit run app.py
 """
 
+import sys
+from pathlib import Path
+
+# Fix import path for Streamlit
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,7 +17,7 @@ import networkx as nx
 import math
 import os
 
-from graphs import create_graph
+from graphs.generated_graphs import create_graph
 from classical import run_classical_search
 from quantum import run_grover_search
 from visualization import plot_graph, plot_search_comparison, PerformancePlotter

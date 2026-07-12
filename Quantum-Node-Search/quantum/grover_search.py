@@ -7,9 +7,8 @@ import math
 from typing import Tuple, Dict, Any
 import time
 
-from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
+from qiskit import QuantumCircuit
 from qiskit_aer import AerSimulator
-from qiskit.primitives import Sampler
 
 from .oracle import QuantumOracle
 from .diffusion import DiffusionOperator
@@ -19,52 +18,24 @@ class GroverSearch:
     """Implements Grover's quantum search algorithm."""
     
     def __init__(self, n_nodes: int, target: int, seed: int = 42):
-        """
-        Initialize Grover's algorithm.
-        
-        Args:
-            n_nodes: Total number of nodes (N)
-            target: Target node to search for
-            seed: Random seed for reproducibility
-        """
         self.n_nodes = n_nodes
         self.target = target
         self.seed = seed
-        
-        # Calculate number of qubits needed
         self.n_qubits = math.ceil(math.log2(n_nodes))
         
-        # Ensure target is valid
         if target >= n_nodes:
             raise ValueError(f"Target {target} >= number of nodes {n_nodes}")
         
-        # Calculate optimal number of iterations
         self.iterations = self._calculate_iterations()
     
     def _calculate_iterations(self) -> int:
-        """
-        Calculate optimal number of Grover iterations.
-        k ≈ π/4 * √N
-        
-        Returns:
-            Number of iterations
-        """
-        return round(math.pi / 4 * math.sqrt(self.n_nodes))
-    
+        """Calculate optimal number of Grover iterations."""
+        # Use actual quantum search space size (2^n_qubits), not n_nodes
+        search_space_size = 2 ** self.n_qubits
+        return round(math.pi / 4 * math.sqrt(search_space_size))
+
     def construct_grover_circuit(self) -> QuantumCircuit:
-        """
-        Construct the complete Grover circuit.
-        
-        Steps:
-        1. Initialization: Create uniform superposition with Hadamard
-        2. Apply Grover operator k times:
-           a. Apply oracle (marks target state)
-           b. Apply diffusion operator (amplifies amplitude)
-        3. Measurement
-        
-        Returns:
-            QuantumCircuit implementing Grover's algorithm
-        """
+        """Construct the complete Grover circuit."""
         qc = QuantumCircuit(self.n_qubits, self.n_qubits, name='Grover')
         
         # Step 1: Initialize uniform superposition
@@ -73,35 +44,23 @@ class GroverSearch:
         
         # Step 2: Apply Grover iterations
         for iteration in range(self.iterations):
-            # Apply oracle - decompose it instead of appending as gate
+            # Apply oracle
             oracle = QuantumOracle(self.n_qubits, self.target)
             oracle_circuit = oracle.construct_oracle()
-            # Decompose and append instructions directly
-            for instruction in oracle_circuit.data:
-                qc.append(instruction)
+            qc.compose(oracle_circuit, inplace=True)
             
-            # Apply diffusion operator - decompose it instead of appending as gate
+            # Apply diffusion
             diffusion = DiffusionOperator(self.n_qubits)
             diffusion_circuit = diffusion.construct_diffusion_operator()
-            # Decompose and append instructions directly
-            for instruction in diffusion_circuit.data:
-                qc.append(instruction)
+            qc.compose(diffusion_circuit, inplace=True)
         
         # Step 3: Measurement
         qc.measure(range(self.n_qubits), range(self.n_qubits))
         
         return qc
     
-    def search(self, shots: int = 1000) -> Tuple[bool, int, float, Dict[str, Any]]:
-        """
-        Execute Grover's algorithm and return results.
-        
-        Args:
-            shots: Number of measurement shots
-            
-        Returns:
-            (found, measured_node, execution_time, detailed_results)
-        """
+    def search(self, shots: int = 10) -> Tuple[bool, int, float, Dict[str, Any]]:
+        """Execute Grover's algorithm and return results."""
         start_time = time.time()
         
         # Construct circuit
@@ -115,15 +74,37 @@ class GroverSearch:
         
         execution_time = time.time() - start_time
         
-        # Find most common measurement result
-        most_common_bitstring = max(counts, key=counts.get)
-        measured_node = int(most_common_bitstring, 2)
+        # Filter to only valid nodes (within n_nodes range)
+        valid_counts = {}
+        for bitstring, count in counts.items():
+            node_value = int(bitstring, 2)
+            if node_value < self.n_nodes:  # Only keep valid nodes
+                valid_counts[bitstring] = count
         
-        # Calculate success probability
-        success_count = counts.get(self._get_binary_representation(self.target), 0)
-        success_probability = (success_count / shots) * 100
+        # Find most common VALID measurement result
+        if valid_counts:
+            most_common_bitstring = max(valid_counts, key=valid_counts.get)
+            measured_node = int(most_common_bitstring, 2)
+        else:
+            # Fallback: find any valid result
+            for bitstring, count in sorted(counts.items(), key=lambda x: x[1], reverse=True):
+                node_value = int(bitstring, 2)
+                if node_value < self.n_nodes:
+                    measured_node = node_value
+                    most_common_bitstring = bitstring
+                    break
+            else:
+                # Last resort: return 0
+                measured_node = 0
+                most_common_bitstring = format(0, f'0{self.n_qubits}b')
         
-        # Check if target was found in top measurement
+        # Calculate success probability (only for valid nodes)
+        target_bitstring = format(self.target, f'0{self.n_qubits}b')
+        success_count = valid_counts.get(target_bitstring, 0)
+        total_valid = sum(valid_counts.values()) if valid_counts else 1
+        success_probability = (success_count / total_valid) * 100 if total_valid > 0 else 0
+        
+        # Check if target was found
         found = measured_node == self.target
         
         details = {
@@ -131,30 +112,18 @@ class GroverSearch:
             'shots': shots,
             'success_probability': success_probability,
             'success_count': success_count,
+            'valid_measurements': len(valid_counts),
             'all_counts': counts,
+            'valid_counts': valid_counts,
             'n_qubits': self.n_qubits,
             'complexity': f'O(√N) = O(√{self.n_nodes})'
         }
         
         return found, measured_node, execution_time, details
-    
-    def _get_binary_representation(self, num: int) -> str:
-        """Convert number to binary representation."""
-        return format(num, f'0{self.n_qubits}b')
 
 
-def run_grover_search(n_nodes: int, target: int, shots: int = 1000) -> dict:
-    """
-    Convenience function to run Grover's algorithm.
-    
-    Args:
-        n_nodes: Total number of nodes
-        target: Target node to find
-        shots: Number of measurement shots
-        
-    Returns:
-        Dictionary with search results
-    """
+def run_grover_search(n_nodes: int, target: int, shots: int = 10) -> dict:
+    """Convenience function to run Grover's algorithm."""
     grover = GroverSearch(n_nodes, target)
     found, measured, time_taken, details = grover.search(shots=shots)
     
@@ -162,7 +131,7 @@ def run_grover_search(n_nodes: int, target: int, shots: int = 1000) -> dict:
         'found': found,
         'measured_node': measured,
         'execution_time': time_taken,
-        'nodes_checked': 1,  # Quantum: conceptually checks all at once
+        'nodes_checked': 1,
         'grover_iterations': details['iterations'],
         'success_probability': details['success_probability'],
         'complexity': details['complexity'],
